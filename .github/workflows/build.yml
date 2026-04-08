@@ -26,7 +26,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'yarn'   # 如果你用的是 npm，请改成 cache: 'npm'
+          cache: 'yarn'   
+          cache-dependency-path: 'web/yarn.lock'  # <-- 加上这一行，指定 lock 文件的真实路径
 
       - name: Install dependencies (web)
         working-directory: web
