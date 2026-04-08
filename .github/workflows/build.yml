@@ -1,52 +1,51 @@
-name: Build Mobile Apps
+name: Build single HTML (web)
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - master      # 或 main，按你实际主分支名改
+    paths:
+      - 'web/**'    # 只有 web/ 目录变动才触发（可选）
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read   # 不需要写 repo，只要上传 artifact
 
 jobs:
-  build-android:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'yarn'        # 因为 web/ 下有 yarn.lock；如果是 npm 可改成 npm
 
-      - name: Prepare Web Assets
+      - name: Install dependencies (web)
+        working-directory: web
+        run: yarn install --frozen-lockfile   # 如果你是 npm：npm ci
+
+      - name: Build web (single HTML)
+        working-directory: web
+        run: yarn build                     # 对应 package.json 的 "build": "tsc -b && vite build"
+
+      - name: Prepare artifact (zip)
         run: |
-          cd web
-          mkdir -p www
-          cp -r index.html css js lib www/ 2>/dev/null || true
+          mkdir -p artifact
+          cp docs/index.html artifact/
+          cd artifact
+          zip ../mirage-decode-single-html.zip index.html
+        working-directory: ${{ github.workspace }}  # 根目录
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '21'
-
-      - name: Install & Build Android
-        run: |
-          cd web
-          npm install @capacitor/core @capacitor/cli @capacitor/android
-          if [ ! -d "android" ]; then
-            npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
-            npx cap add android
-          fi
-          
-          # 修复点 1: 解决 Android Kotlin 类重复问题 (Duplicate class error)
-          # 在 build.gradle 中强制统一 Kotlin 版本
-          sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
-
-          npx cap sync android
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug
-
-      - name: Upload APK
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-debug-apk
-          path: web/android/app/build/outputs/apk/debug/app-debug.apk
+          name: mirage-decode-single-html
+          path: mirage-decode-single-html.zip
+          retention-days: 30      # 保留 30 天，按需改
