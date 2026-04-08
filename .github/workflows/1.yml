@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-ios:
+ build-ios:
     runs-on: macos-latest
     steps:
       - name: Checkout Code
@@ -33,18 +33,36 @@ jobs:
           cd web
           if [ ! -d "ios" ]; then
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir www || true
-            # 关键修复: 允许 add ios 失败（忽略第一次必败的 pod install），不中断流程
+            # 允许 add ios 失败，不中断流程
             npx cap add ios || echo "Allowing auto pod install to fail initially..."
           fi
           
-          # 此时 ios 文件夹已经生成，我们来修改版本号
-          sed -i '' "s/platform :ios, '12.0'/platform :ios, '14.0'/g" ios/App/Podfile || true
-          sed -i '' "s/platform :ios, '13.0'/platform :ios, '14.0'/g" ios/App/Podfile || true
+          # 使用 Python 进行绝对精准且跨平台的文本替换，告别 macOS sed 的兼容问题
+          cat << 'EOF' > fix_ios_target.py
+          import os
+          import re
+
+          pod_path = 'ios/App/Podfile'
+          if os.path.exists(pod_path):
+              with open(pod_path, 'r') as f: content = f.read()
+              # 强制将 platform :ios 后面的任何版本号替换为 14.0
+              content = re.sub(r'platform :ios, .*', "platform :ios, '14.0'", content)
+              with open(pod_path, 'w') as f: f.write(content)
+
+          pbx_path = 'ios/App/App.xcodeproj/project.pbxproj'
+          if os.path.exists(pbx_path):
+              with open(pbx_path, 'r') as f: content = f.read()
+              # 强制将工程文件中的所有编译目标替换为 14.0
+              content = re.sub(r'IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;', 'IPHONEOS_DEPLOYMENT_TARGET = 14.0;', content)
+              with open(pbx_path, 'w') as f: f.write(content)
+          EOF
           
-          # 批量修改 Xcode 工程文件中的编译目标
-          find ios/App/App.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' {} + || true
+          python3 fix_ios_target.py
           
-          # 重新执行 sync，这次 pod install 将会使用 14.0 的配置，顺利通过
+          # 清除上一次失败遗留的 lock 文件和 Pods 缓存，防止它读取旧记录
+          rm -rf ios/App/Podfile.lock ios/App/Pods
+          
+          # 重新执行 sync，此时环境已被彻底清理且锁定在 14.0
           npx cap sync ios
 
       - name: Build iOS App
