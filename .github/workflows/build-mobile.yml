@@ -27,7 +27,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '21' # 修复点：升级到 Java 21
+          java-version: '21'
 
       - name: Install & Build Android
         run: |
@@ -37,6 +37,11 @@ jobs:
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
             npx cap add android
           fi
+          
+          # 修复点 1: 解决 Android Kotlin 类重复问题 (Duplicate class error)
+          # 在 build.gradle 中强制统一 Kotlin 版本
+          sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
+
           npx cap sync android
           cd android
           chmod +x gradlew
@@ -78,8 +83,11 @@ jobs:
             npx cap add ios
           fi
           
-          # 修复点：强制将 Podfile 中的平台版本从默认(可能是12或13)改为 14.0
-          sed -i '' "s/platform :ios, '1[23].0'/platform :ios, '14.0'/g" ios/App/Podfile
+          # 修复点 2: 彻底解决 iOS Deployment Target 过低问题
+          # 1. 修改 Podfile 的平台定义
+          sed -i '' "s/platform :ios, '1[0-9].0'/platform :ios, '14.0'/g" ios/App/Podfile
+          # 2. 修改 project.pbxproj 里的所有部署目标版本
+          find ios/App/App.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' {} +
           
           npx cap sync ios
 
