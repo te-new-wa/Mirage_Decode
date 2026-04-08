@@ -27,70 +27,7 @@ jobs:
           yarn install --frozen-lockfile
           yarn build
 
-      # ==========================================
-      # 新增：注入安卓保存图片补丁
-      # ==========================================
-      - name: Inject Android Save Handler
-        run: |
-          cat >> docs/index.html << 'EOF'
-          <script>
-          (function() {
-            if (!window.Capacitor || !window.Capacitor.isNativePlatform()) return;
-            const { Filesystem, Directory, Share } = window.Capacitor.Plugins;
-            
-            document.addEventListener('click', async function(e) {
-              let target = e.target;
-              while (target && target.tagName !== 'A') target = target.parentElement;
-              if (!target || !target.hasAttribute('download')) return;
-              
-              const href = target.getAttribute('href');
-              if (!href || (!href.startsWith('blob:') && !href.startsWith('data:'))) return;
-
-              e.preventDefault();
-              e.stopPropagation();
-
-              try {
-                let base64Data;
-                // 1. 提取图片的 Base64 数据
-                if (href.startsWith('blob:')) {
-                  const response = await fetch(href);
-                  const blob = await response.blob();
-                  base64Data = await new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-                    reader.readAsDataURL(blob);
-                  });
-                } else {
-                  base64Data = href.split(',')[1];
-                }
-                
-                let fileName = target.getAttribute('download') || 'mirage_' + Date.now() + '.png';
-                
-                // 2. 将图片写入 App 的临时缓存目录（无需申请存储权限）
-                await Filesystem.writeFile({
-                  path: fileName,
-                  data: base64Data,
-                  directory: Directory.Cache
-                });
-                
-                // 3. 获取本地文件路径
-                const fileUri = await Filesystem.getUri({
-                  path: fileName,
-                  directory: Directory.Cache
-                });
-                
-                // 4. 唤起安卓原生的“分享/保存”面板
-                await Share.share({ url: fileUri.uri });
-                
-              } catch (err) {
-                if (err.message && err.message.includes('User canceled')) return; // 用户主动取消，忽略
-                console.error('保存失败', err);
-                alert('保存失败: ' + err.message);
-              }
-            }, true); // 使用捕获阶段，确保比原框架先执行
-          })();
-          </script>
-          EOF
+      # 删除了之前的 Inject Android Save Handler 步骤，不再需要！
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -101,7 +38,9 @@ jobs:
       - name: Install & Build Android
         run: |
           cd web
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          # 注意这里：加上了 @capacitor/filesystem 和 @capacitor/share
+          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/share
+          
           if [ ! -d "android" ]; then
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir ../docs
             npx cap add android
