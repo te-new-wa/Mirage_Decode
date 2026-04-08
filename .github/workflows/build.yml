@@ -1,25 +1,19 @@
-name: Build Android APK
+name: Build Mobile Apps 
 
 on:
-  workflow_dispatch: # 手动触发按钮
+  push:
+    branches: [ master ]
+    paths:
+      - 'web/**'            # 优化：只有 web 目录变动才自动打包，节省 Actions 时长
+  workflow_dispatch:
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. 拉取代码
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. 配置 Java 环境 (安卓编译必须)
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      # 3. 配置 Node 环境
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -27,41 +21,41 @@ jobs:
           cache: 'yarn'
           cache-dependency-path: 'web/yarn.lock'
 
-      # 4. 安装前端依赖并构建网页
-      - name: Install & Build Web App
-        working-directory: web
+      # 核心修改：不能用 cp，必须用 Vite 编译
+      - name: Prepare Web Assets (Vite Build)
         run: |
+          cd web
           yarn install --frozen-lockfile
           yarn build
-          # 构建完成后，产物会输出到上一级的 docs/ 目录
+          # 构建完成后，产物被输出到了上一级的 docs/ 目录 (即 ../docs)
 
-      # 5. 初始化 Capacitor 并配置安卓环境
-      - name: Initialize Capacitor
-        working-directory: ${{ github.workspace }}
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Install & Build Android
         run: |
-          npm init -y
+          cd web
           npm install @capacitor/core @capacitor/cli @capacitor/android
-          npx cap init "Mirage Decode" "com.tankfactory.miragedecode" --web-dir docs
-          # web-dir 必须指向 Vite 的输出目录
+          if [ ! -d "android" ]; then
+            # 核心修改：因为当前在 web/ 目录，所以 docs 目录在上一级，写 ../docs
+            npx cap init "MirageDecode" "com.mirage.decode" --web-dir ../docs
+            npx cap add android
+          fi
+          
+          # 修复点 1: 解决 Android Kotlin 类重复问题 (Duplicate class error)
+          # 在 build.gradle 中强制统一 Kotlin 版本
+          sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
 
-      # 6. 添加安卓平台并同步网页文件
-      - name: Add Android Platform & Sync
-        working-directory: ${{ github.workspace }}
-        run: |
-          npx cap add android
           npx cap sync android
-
-      # 7. 编译 APK (Debug版本，无需签名密钥，适合自用测试)
-      - name: Build Android APK
-        working-directory: android
-        run: |
+          cd android
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      # 8. 上传生成的 APK 文件
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Mirage-Decode-Android
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
+          name: android-debug-apk
+          path: web/android/app/build/outputs/apk/debug/app-debug.apk
