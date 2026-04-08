@@ -20,23 +20,19 @@ jobs:
       - name: Prepare Web Assets
         run: |
           cd web
-          # 创建一个干净的 www 文件夹
           mkdir -p www
-          # 复制 web 目录下的网页文件到 www (排除 www 文件夹本身)
-          # 如果你的文件比较多，可以根据实际情况调整 cp 命令
           cp -r index.html css js lib www/ 2>/dev/null || true
-          # 确保 index.html 存在
-          ls -l www/
 
-      - name: Install Capacitor
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21' # 修复点：升级到 Java 21
+
+      - name: Install & Build Android
         run: |
           cd web
           npm install @capacitor/core @capacitor/cli @capacitor/android
-
-      - name: Initialize & Build Android
-        run: |
-          cd web
-          # 指定 web-dir 为刚才创建的 www
           if [ ! -d "android" ]; then
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
             npx cap add android
@@ -74,15 +70,22 @@ jobs:
           cd web
           npm install @capacitor/core @capacitor/cli @capacitor/ios
 
-      - name: Initialize & Build iOS
+      - name: Initialize & Fix iOS Target
         run: |
           cd web
           if [ ! -d "ios" ]; then
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
             npx cap add ios
           fi
+          
+          # 修复点：强制将 Podfile 中的平台版本从默认(可能是12或13)改为 14.0
+          sed -i '' "s/platform :ios, '1[23].0'/platform :ios, '14.0'/g" ios/App/Podfile
+          
           npx cap sync ios
-          cd ios/App
+
+      - name: Build iOS App
+        run: |
+          cd web/ios/App
           xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos build CODE_SIGNING_ALLOWED=NO
 
       - name: Upload iOS Project
