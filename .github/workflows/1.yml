@@ -1,0 +1,108 @@
+name: Build Mobile Apps (Android & iOS)
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  # 安卓部分：保持原样，不进行任何修改
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare Web Assets
+        run: |
+          cd web
+          mkdir -p www
+          cp -r index.html css js lib www/ 2>/dev/null || true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Install & Build Android
+        run: |
+          cd web
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          if [ ! -d "android" ]; then
+            npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
+            npx cap add android
+          fi
+          
+          # 之前的安卓修复逻辑（保持不动）
+          sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
+
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: web/android/app/build/outputs/apk/debug/app-debug.apk
+
+  # iOS 部分：针对版本兼容性进行深度修复
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare Web Assets
+        run: |
+          cd web
+          mkdir -p www
+          cp -r index.html css js lib www/ 2>/dev/null || true
+
+      - name: Install Capacitor
+        run: |
+          cd web
+          npm install @capacitor/core @capacitor/cli @capacitor/ios
+
+      - name: Initialize & Force Fix iOS Target
+        run: |
+          cd web
+          if [ ! -d "ios" ]; then
+            # 关键修复 1: 使用 --no-sync，防止在修改版本号前执行 pod install
+            npx cap add ios --no-sync
+          fi
+          
+          # 关键修复 2: 强制修改 Podfile 中的平台版本
+          # 我们把所有可能的 platform :ios 声明都统一改为 14.0
+          sed -i '' "s/platform :ios, '.*'/platform :ios, '14.0'/g" ios/App/Podfile
+          
+          # 关键修复 3: 批量修改工程文件中的编译目标
+          # 这会扫描项目配置，将所有的 IPHONEOS_DEPLOYMENT_TARGET 设为 14.0
+          find ios/App/App.xcodeproj -name "project.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' {} +
+          
+          # 关键修复 4: 现在版本号一致了，再手动执行同步
+          npx cap sync ios
+
+      - name: Build iOS App
+        run: |
+          cd web/ios/App
+          # 增加编译参数以跳过签名校验
+          xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Upload iOS Project
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-project
+          path: web/ios/App
