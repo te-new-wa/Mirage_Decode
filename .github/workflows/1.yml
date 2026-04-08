@@ -6,54 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 安卓部分：保持原样，不进行任何修改
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Prepare Web Assets
-        run: |
-          cd web
-          mkdir -p www
-          cp -r index.html css js lib www/ 2>/dev/null || true
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '21'
-
-      - name: Install & Build Android
-        run: |
-          cd web
-          npm install @capacitor/core @capacitor/cli @capacitor/android
-          if [ ! -d "android" ]; then
-            npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
-            npx cap add android
-          fi
-          
-          # 之前的安卓修复逻辑（保持不动）
-          sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
-
-          npx cap sync android
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-debug-apk
-          path: web/android/app/build/outputs/apk/debug/app-debug.apk
-
-  # iOS 部分：针对版本兼容性进行深度修复
   build-ios:
     runs-on: macos-latest
     steps:
