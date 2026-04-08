@@ -1,10 +1,6 @@
 name: Build Mobile Apps 
 
 on:
-  push:
-    branches: [ master ]
-    paths:
-      - 'web/**'
   workflow_dispatch:
 
 jobs:
@@ -27,19 +23,22 @@ jobs:
           yarn install --frozen-lockfile
           yarn build
 
-      # 删除了之前的 Inject Android Save Handler 步骤，不再需要！
-
+      # ==========================================
+      # 性能优化核心 1：开启 Gradle 依赖缓存
+      # 第一次构建会下载依赖并缓存，后续构建直接复用，跳过几百MB的下载
+      # ==========================================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '21'
+          cache: 'gradle' 
 
       - name: Install & Build Android
         run: |
           cd web
-          # 注意这里：加上了 @capacitor/filesystem 和 @capacitor/share
-          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/share
+          # 优化：统一使用 yarn，避免 npm 和 yarn 混用导致的锁文件冲突和额外下载时间
+          yarn add @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/share
           
           if [ ! -d "android" ]; then
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir ../docs
@@ -51,7 +50,14 @@ jobs:
           npx cap sync android
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          
+          # ==========================================
+          # 性能优化核心 2：添加 Gradle 构建优化参数
+          # --no-daemon：CI 环境下禁用后台守护进程，防止进程残留报错
+          # --parallel：如果有多个模块，并行编译
+          # --build-cache：开启 Gradle 本地构建缓存，没改动的代码不会重新编译
+          # ==========================================
+          ./gradlew assembleDebug --no-daemon --parallel --build-cache
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
