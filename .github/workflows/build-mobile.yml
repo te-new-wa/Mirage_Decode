@@ -1,0 +1,84 @@
+name: Build Mobile Apps (Android & iOS)
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          cd web
+          npm install
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          # 如果之前没初始化过，这里可以简单初始化一个壳子
+          if [ ! -d "android" ]; then
+            npx cap init "MirageDecode" "com.mirage.decode" --web-dir .
+            npx cap add android
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Build Android APK
+        run: |
+          cd web
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: web/android/app/build/outputs/apk/debug/app-debug.apk
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          cd web
+          npm install
+          npm install @capacitor/core @capacitor/cli @capacitor/ios
+          if [ ! -d "ios" ]; then
+            npx cap init "MirageDecode" "com.mirage.decode" --web-dir .
+            npx cap add ios
+          fi
+
+      - name: Build iOS App
+        run: |
+          cd web
+          npx cap sync ios
+          cd ios/App
+          # 这里仅进行编译检查，不涉及签名
+          xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos build CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload iOS Project
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-project
+          path: web/ios/App
