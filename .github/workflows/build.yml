@@ -1,6 +1,11 @@
 name: Build Mobile Apps 
 
 on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'web/**'
+      - '.github/workflows/build-android.yml' 
   workflow_dispatch:
 
 jobs:
@@ -24,14 +29,14 @@ jobs:
           yarn build
 
       # ==========================================
-      # 核心逻辑 1：注入 JS，把前端的 blob: 图片实时转换成 data: 图片
-      # 因为安卓底层无法直接读取 blob: 链接，必须转成 Base64 才能长按保存
+      # 核心逻辑 1：注入 JS，负责转换 Blob 和 监听长按
       # ==========================================
-      - name: Inject Blob to DataURL Converter
+      - name: Inject JS Handler
         run: |
-          cat > /tmp/blob_converter.js << 'EOF'
+          cat > /tmp/js_handler.js << 'EOF'
           <script>
           (function() {
+              // 1. 把前端的 blob: 图片实时转换成 data: 图片，因为安卓底层无法直接读取 blob:
               const convertBlob = async (img) => {
                   if (img.src && img.src.startsWith("blob:")) {
                       try {
@@ -53,19 +58,42 @@ jobs:
               });
               observer.observe(document.body, { childList: true, subtree: true });
               document.querySelectorAll("img").forEach(convertBlob);
+
+              // 2. 使用 JS 监听长按保存（绕过 Android 15 被移除的 HitTestResult）
+              if (window.AndroidNativeBridge) {
+                  // 彻底屏蔽安卓原生的图片长按菜单
+                  document.addEventListener('contextmenu', function(e) {
+                      if (e.target.tagName === 'IMG' || (e.target.closest && e.target.closest('img'))) {
+                          e.preventDefault();
+                      }
+                  }, true);
+
+                  let timer = null;
+                  document.addEventListener('touchstart', function(e) {
+                      let target = e.target;
+                      while (target && target.tagName !== 'IMG') target = target.parentElement;
+                      if (target && target.src) {
+                          timer = setTimeout(() => {
+                              window.AndroidNativeBridge.saveImageToGallery(target.src);
+                          }, 500); // 长按 500ms 触发
+                      }
+                  }, true); 
+
+                  document.addEventListener('touchend', function() { clearTimeout(timer); }, true);
+                  document.addEventListener('touchmove', function() { clearTimeout(timer); }, true);
+                  document.addEventListener('touchcancel', function() { clearTimeout(timer); }, true);
+              }
           })();
           </script>
           EOF
           
-          # 将转换脚本安全地插入到 index.html 的 <head> 标签后
-          sed -i '/<head>/r /tmp/blob_converter.js' docs/index.html
+          sed -i '/<head>/r /tmp/js_handler.js' docs/index.html
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '21'
-          #cache: 'gradle' 
 
       - name: Install & Build Android
         run: |
@@ -78,7 +106,7 @@ jobs:
           fi
 
           # ==========================================
-          # 核心逻辑 2：用 Java 覆盖 MainActivity，实现原生长按保存图片到相册
+          # 核心逻辑 2：重写 MainActivity（修复 API 35 兼容性 + Base64 引用错误）
           # ==========================================
           cat > android/app/src/main/java/com/mirage/decode/MainActivity.java << 'JAVA_EOF'
           package com.mirage.decode;
@@ -95,7 +123,8 @@ jobs:
           import android.os.Handler;
           import android.os.Looper;
           import android.provider.MediaStore;
-          import android.webkit.HitTestResult;
+          import android.util.Base64; // 修复：使用 android.util.Base64
+          import android.webkit.JavascriptInterface;
           import android.webkit.WebView;
           import android.widget.Toast;
 
@@ -104,10 +133,7 @@ jobs:
 
           import com.getcapacitor.BridgeActivity;
 
-          import java.io.InputStream;
           import java.io.OutputStream;
-          import java.net.URL;
-          import java.util.Base64;
 
           public class MainActivity extends BridgeActivity {
               private static final int REQUEST_STORAGE_PERMISSION = 1001;
@@ -115,34 +141,26 @@ jobs:
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
+                  super.onCreate(savedInstanceState); // 修复：去掉多余括号
                   
-                  // 等待 WebView 初始化完毕后注入长按监听
                   getWindow().getDecorView().post(() -> {
                       WebView webView = getBridge().getWebView();
                       if (webView != null) {
-                          setupLongPressSave(webView);
+                          // 注册 JS 桥接，供前端长按调用
+                          webView.addJavascriptInterface(new WebAppInterface(), "AndroidNativeBridge");
                       }
                   });
               }
 
-              private void setupLongPressSave(WebView webView) {
-                  webView.setOnLongClickListener(v -> {
-                      WebView.HitTestResult result = webView.getHitTestResult();
-                      // 判断长按的是不是图片
-                      if (result != null && (result.getType() == HitTestResult.IMAGE_TYPE || result.getType() == HitTestResult.SRC_IMAGE_ANCHOR_TYPE)) {
-                          String imageUrl = result.getExtra();
-                          if (imageUrl != null && !imageUrl.isEmpty() && !imageUrl.equals("about:blank")) {
-                              checkPermissionAndSave(imageUrl);
-                              return true; // 拦截事件，阻止弹出系统默认的无用复制菜单
-                          }
-                      }
-                      return false;
-                  });
+              // JS 桥接类
+              public class WebAppInterface {
+                  @JavascriptInterface
+                  public void saveImageToGallery(final String imageUrl) {
+                      checkPermissionAndSave(imageUrl);
+                  }
               }
 
               private void checkPermissionAndSave(String imageUrl) {
-                  // Android 10 (API 29) 以上通过 MediaStore 无需申请存储权限
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                       saveImage(imageUrl);
                   } else {
@@ -174,16 +192,13 @@ jobs:
                       try {
                           Bitmap bitmap = null;
                           
-                          // 处理 Base64 格式的图片 (前端注入脚本已将 blob 转为此格式)
                           if (imageUrl.startsWith("data:")) {
                               String base64Str = imageUrl.substring(imageUrl.indexOf(",") + 1);
-                              byte[] decodedBytes = Base64.decode(base64Str, Base64.DEFAULT);
+                              byte[] decodedBytes = Base64.decode(base64Str, Base64.DEFAULT); 
                               bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.length);
-                          } 
-                          // 处理普通网络图片
-                          else if (imageUrl.startsWith("http")) {
-                              URL url = new URL(imageUrl);
-                              InputStream is = url.openStream();
+                          } else if (imageUrl.startsWith("http")) {
+                              java.net.URL url = new java.net.URL(imageUrl);
+                              java.io.InputStream is = url.openStream();
                               bitmap = BitmapFactory.decodeStream(is);
                               is.close();
                           }
@@ -193,7 +208,6 @@ jobs:
                               return;
                           }
 
-                          // 保存到系统相册 (Pictures/MirageDecode 目录)
                           String fileName = "Mirage_" + System.currentTimeMillis() + ".png";
                           ContentValues values = new ContentValues();
                           values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
@@ -223,12 +237,10 @@ jobs:
           }
           JAVA_EOF
 
-          # ==========================================
-          # 核心逻辑 3：配置 Android Manifest，兼容旧版安卓的存储策略
-          # ==========================================
+          # 兼容旧版安卓的存储策略
           sed -i 's/<application /<application android:requestLegacyExternalStorage="true" /' android/app/src/main/AndroidManifest.xml
 
-          # 解决 kotlin stdlib 冲突 (保留你原有的优化)
+          # 解决 kotlin stdlib 冲突
           sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
 
           npx cap sync android
