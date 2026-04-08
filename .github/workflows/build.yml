@@ -4,7 +4,7 @@ on:
   push:
     branches: [ master ]
     paths:
-      - 'web/**'            # 优化：只有 web 目录变动才自动打包，节省 Actions 时长
+      - 'web/**'
   workflow_dispatch:
 
 jobs:
@@ -21,13 +21,76 @@ jobs:
           cache: 'yarn'
           cache-dependency-path: 'web/yarn.lock'
 
-      # 核心修改：不能用 cp，必须用 Vite 编译
       - name: Prepare Web Assets (Vite Build)
         run: |
           cd web
           yarn install --frozen-lockfile
           yarn build
-          # 构建完成后，产物被输出到了上一级的 docs/ 目录 (即 ../docs)
+
+      # ==========================================
+      # 新增：注入安卓保存图片补丁
+      # ==========================================
+      - name: Inject Android Save Handler
+        run: |
+          cat >> docs/index.html << 'EOF'
+          <script>
+          (function() {
+            if (!window.Capacitor || !window.Capacitor.isNativePlatform()) return;
+            const { Filesystem, Directory, Share } = window.Capacitor.Plugins;
+            
+            document.addEventListener('click', async function(e) {
+              let target = e.target;
+              while (target && target.tagName !== 'A') target = target.parentElement;
+              if (!target || !target.hasAttribute('download')) return;
+              
+              const href = target.getAttribute('href');
+              if (!href || (!href.startsWith('blob:') && !href.startsWith('data:'))) return;
+
+              e.preventDefault();
+              e.stopPropagation();
+
+              try {
+                let base64Data;
+                // 1. 提取图片的 Base64 数据
+                if (href.startsWith('blob:')) {
+                  const response = await fetch(href);
+                  const blob = await response.blob();
+                  base64Data = await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                    reader.readAsDataURL(blob);
+                  });
+                } else {
+                  base64Data = href.split(',')[1];
+                }
+                
+                let fileName = target.getAttribute('download') || 'mirage_' + Date.now() + '.png';
+                
+                // 2. 将图片写入 App 的临时缓存目录（无需申请存储权限）
+                await Filesystem.writeFile({
+                  path: fileName,
+                  data: base64Data,
+                  directory: Directory.Cache
+                });
+                
+                // 3. 获取本地文件路径
+                const fileUri = await Filesystem.getUri({
+                  path: fileName,
+                  directory: Directory.Cache
+                });
+                
+                // 4. 唤起安卓原生的“分享/保存”面板
+                await Share.share({ url: fileUri.uri });
+                
+              } catch (err) {
+                if (err.message && err.message.includes('User canceled')) return; // 用户主动取消，忽略
+                console.error('保存失败', err);
+                alert('保存失败: ' + err.message);
+              }
+            }, true); // 使用捕获阶段，确保比原框架先执行
+          })();
+          </script>
+          EOF
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -40,13 +103,10 @@ jobs:
           cd web
           npm install @capacitor/core @capacitor/cli @capacitor/android
           if [ ! -d "android" ]; then
-            # 核心修改：因为当前在 web/ 目录，所以 docs 目录在上一级，写 ../docs
             npx cap init "MirageDecode" "com.mirage.decode" --web-dir ../docs
             npx cap add android
           fi
           
-          # 修复点 1: 解决 Android Kotlin 类重复问题 (Duplicate class error)
-          # 在 build.gradle 中强制统一 Kotlin 版本
           sed -i '/dependencies {/a \    constraints { \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now part of kotlin-stdlib") } \n        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now part of kotlin-stdlib") } \n    }' android/app/build.gradle
 
           npx cap sync android
