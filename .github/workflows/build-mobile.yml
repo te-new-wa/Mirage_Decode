@@ -3,7 +3,7 @@ name: Build Mobile Apps (Android & iOS)
 on:
   push:
     branches: [ master ]
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   build-android:
@@ -17,26 +17,30 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Dependencies
+      - name: Prepare Web Assets
         run: |
           cd web
-          npm install
+          # 创建一个干净的 www 文件夹
+          mkdir -p www
+          # 复制 web 目录下的网页文件到 www (排除 www 文件夹本身)
+          # 如果你的文件比较多，可以根据实际情况调整 cp 命令
+          cp -r index.html css js lib www/ 2>/dev/null || true
+          # 确保 index.html 存在
+          ls -l www/
+
+      - name: Install Capacitor
+        run: |
+          cd web
           npm install @capacitor/core @capacitor/cli @capacitor/android
-          # 如果之前没初始化过，这里可以简单初始化一个壳子
+
+      - name: Initialize & Build Android
+        run: |
+          cd web
+          # 指定 web-dir 为刚才创建的 www
           if [ ! -d "android" ]; then
-            npx cap init "MirageDecode" "com.mirage.decode" --web-dir .
+            npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
             npx cap add android
           fi
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Build Android APK
-        run: |
-          cd web
           npx cap sync android
           cd android
           chmod +x gradlew
@@ -59,22 +63,26 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Dependencies
+      - name: Prepare Web Assets
         run: |
           cd web
-          npm install
+          mkdir -p www
+          cp -r index.html css js lib www/ 2>/dev/null || true
+
+      - name: Install Capacitor
+        run: |
+          cd web
           npm install @capacitor/core @capacitor/cli @capacitor/ios
+
+      - name: Initialize & Build iOS
+        run: |
+          cd web
           if [ ! -d "ios" ]; then
-            npx cap init "MirageDecode" "com.mirage.decode" --web-dir .
+            npx cap init "MirageDecode" "com.mirage.decode" --web-dir www
             npx cap add ios
           fi
-
-      - name: Build iOS App
-        run: |
-          cd web
           npx cap sync ios
           cd ios/App
-          # 这里仅进行编译检查，不涉及签名
           xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos build CODE_SIGNING_ALLOWED=NO
 
       - name: Upload iOS Project
