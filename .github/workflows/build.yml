@@ -1,17 +1,18 @@
 name: Build single HTML (web)
 
 on:
+  workflow_dispatch: 
   push:
     branches:
-      - master      # 或 main，按你实际主分支名改
+      - master
     paths:
-      - 'web/**'    # 只有 web/ 目录变动才触发（可选）
+      - 'web/**'
   pull_request:
     branches:
       - master
 
 permissions:
-  contents: read   # 不需要写 repo，只要上传 artifact
+  contents: read
 
 jobs:
   build:
@@ -25,15 +26,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'yarn'        # 因为 web/ 下有 yarn.lock；如果是 npm 可改成 npm
+          cache: 'yarn'   # 如果你用的是 npm，请改成 cache: 'npm'
 
       - name: Install dependencies (web)
         working-directory: web
-        run: yarn install --frozen-lockfile   # 如果你是 npm：npm ci
+        run: yarn install --frozen-lockfile   # 如果你用的是 npm，请改成 npm ci
 
       - name: Build web (single HTML)
         working-directory: web
-        run: yarn build                     # 对应 package.json 的 "build": "tsc -b && vite build"
+        run: yarn build                     # 如果你用的是 npm，请改成 npm run build
 
       - name: Prepare artifact (zip)
         run: |
@@ -41,11 +42,11 @@ jobs:
           cp docs/index.html artifact/
           cd artifact
           zip ../mirage-decode-single-html.zip index.html
-        working-directory: ${{ github.workspace }}  # 根目录
+        working-directory: ${{ github.workspace }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mirage-decode-single-html
           path: mirage-decode-single-html.zip
-          retention-days: 30      # 保留 30 天，按需改
+          retention-days: 30
